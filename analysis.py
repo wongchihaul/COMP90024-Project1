@@ -24,7 +24,7 @@ def generate_Affin_Dict(address):
 # param:
 #     address: the address of data to read
 # return:
-#     afinn: the dict of grid information
+#     grid: the dict of grid information
 ########################################## 
 def generate_grid_dict(address):
     grid = {}
@@ -44,8 +44,9 @@ def generate_grid_dict(address):
 # param:
 #     address: the address of data to read
 #     afinn: the dict to map sentimental vocabs into num
+#     grid: the dict of grid information 
 # return:
-#     sentiment_sum: the sum of sentimental scores of tweets
+#     sentiment_sums: the sum-up sentimental scores for each grid
 ########################################## 
 def calculate_senti_sum(address, afinn, grid):
     sentiment_sums = {}
