@@ -18,6 +18,7 @@ def generate_Affin_Dict(address):
             else:
                 num = int(kv[-1])
             afinn[token] = num
+    f.close()
     return afinn
 
 #########################################
@@ -37,6 +38,7 @@ def generate_grid_dict(address):
                 if key != 'id':
                     coords[key] = value
             grid[ID] = coords
+    f.close()
     return grid
 
 
@@ -73,29 +75,36 @@ def calculate_senti_sum(address, afinn, grid):
                     alphaCode = chr(ord(key[0]) + y_offset) if ord(key[0]) + y_offset <= 68 else key[0]
                     grid_code = grid_code + alphaCode + numCode
             sentiment_sums[grid_code]['#Total Tweets'] += 1
-            text = row['value']['properties']['text']
+            text = row['value']['properties']['text'].lower()
             words = text.split()
             for word in words:
                 while word[-1] in special_ends and len(word) > 1:
                     word = word[0:len(word)-1]
                 if word in afinn.keys():
                     sentiment_sums[grid_code]['#Overall Sentiment Score'] += afinn[word]
+    f.close()
     return sentiment_sums
 
 
-address_1 = 'AFINN.txt'
-address_2 = 'melbGrid.json'
-address_3 = 'tinyTwitter.json'
-address_4 = 'smallTwitter.json'
+if __name__ == "__main__":
 
-afinn = generate_Affin_Dict(address_1)
-grid = generate_grid_dict(address_2)
-tiny_sum = calculate_senti_sum(address_3, afinn, grid)
-small_sum = calculate_senti_sum(address_4, afinn, grid)
-print('The sentimental sum of tiny twitter dataset is: %s' % tiny_sum)
-print('The sentimental sum of small twitter dataset is: %s' % small_sum)
+    address_1 = 'AFINN.txt'
+    address_2 = 'melbGrid.json'
+    address_3 = 'tinyTwitter.json'
+    address_4 = 'smallTwitter.json'
 
-        
+    afinn = generate_Affin_Dict(address_1)
+    grid = generate_grid_dict(address_2)
+    tiny_sum = calculate_senti_sum(address_3, afinn, grid)
+    small_sum = calculate_senti_sum(address_4, afinn, grid)
 
+    print('The sentimental sum of tiny twitter dataset is: %s' % tiny_sum)
+    print('The sentimental sum of small twitter dataset is: %s' % small_sum)
 
-
+    with open('tiny.json', 'w') as t :
+        json.dump(tiny_sum, t)
+    with open('small.json', 'w') as s:
+        json.dump(small_sum, s)
+    
+    t.close()
+    s.close()
