@@ -1,11 +1,10 @@
 import json
 from mpi4py import MPI
-from functools import reduce
 
 
 #########################################
 # param:
-#     address: the address of affin matchin vocabs
+#     address: the address of affin matching vocabs
 # return:
 #     afinn: the dict to map vocabs into sentimental score
 ########################################## 
@@ -26,7 +25,7 @@ def generate_Affin_Dict(address):
 
 #########################################
 # param:
-#     address: the address of data to read
+#     address: the address of melbourne grid data
 # return:
 #     grid: the nested dict of grid information. A grid is conceptualized 
 #           by its xmin, xmax, ymin, ymax properties and named by Id
@@ -61,29 +60,29 @@ def calculate_senti_sum_in_parallel(data, afinn, grid):
         sentiment_sums[key] = {'#Total Tweets' : 0, '#Overall Sentiment Score' : 0}
     special_ends = ['!', ',', '?', '.', '\'', '\"']
     for row in data:
-            location = row['value']['geometry']['coordinates']
-            xPos = location[0]
-            yPos = location[1]
-            grid_code = ''
-            for key, value in grid.items():
-                xMin = value['xmin']
-                xMax = value['xmax']
-                yMin = value['ymin']
-                yMax = value['ymax']
-                x_offset = 0 if xPos != xMin else -1
-                y_offset = 0 if yPos != yMin else 1
-                if xPos >= xMin and xPos <= xMax and yPos >= yMin and yPos < yMax:
-                    numCode = str(int(key[1]) + x_offset) if int(key[1]) + x_offset >= 1 else key[1]
-                    alphaCode = chr(ord(key[0]) + y_offset) if ord(key[0]) + y_offset <= 68 else key[0]
-                    grid_code = grid_code + alphaCode + numCode
-            sentiment_sums[grid_code]['#Total Tweets'] += 1
-            text = row['value']['properties']['text'].lower()
-            words = text.split()
-            for word in words:
-                while word[-1] in special_ends and len(word) > 1:
-                    word = word[0:len(word)-1]
-                if word in afinn.keys():
-                    sentiment_sums[grid_code]['#Overall Sentiment Score'] += afinn[word]
+        location = row['value']['geometry']['coordinates']
+        xPos = location[0]
+        yPos = location[1]
+        grid_code = ''
+        for key, value in grid.items():
+            xMin = value['xmin']
+            xMax = value['xmax']
+            yMin = value['ymin']
+            yMax = value['ymax']
+            x_offset = 0 if xPos != xMin else -1
+            y_offset = 0 if yPos != yMin else 1
+            if xPos >= xMin and xPos <= xMax and yPos >= yMin and yPos < yMax:
+                numCode = str(int(key[1]) + x_offset) if int(key[1]) + x_offset >= 1 else key[1]
+                alphaCode = chr(ord(key[0]) + y_offset) if ord(key[0]) + y_offset <= 68 else key[0]
+                grid_code = grid_code + alphaCode + numCode
+        sentiment_sums[grid_code]['#Total Tweets'] += 1
+        text = row['value']['properties']['text'].lower()
+        words = text.split()
+        for word in words:
+            while word[-1] in special_ends and len(word) > 1:
+                word = word[0:len(word)-1]
+            if word in afinn.keys():
+                sentiment_sums[grid_code]['#Overall Sentiment Score'] += afinn[word]
     return sentiment_sums
 
 #########################################
@@ -106,6 +105,14 @@ def split_data(path, size):
             line += 1
     return array_to_share
 
+#########################################
+# param:
+#     x: the first sentiment sums 
+#     y: the second sentiment sums
+# return:
+#     x: the new sentiment sums which merges the scores
+#        between previous x and y     
+########################################## 
 def gather_result(x,y):
     for k1,v1 in y.items():
         for k2,v2 in v1.items():
@@ -115,9 +122,9 @@ def gather_result(x,y):
 
 if __name__ == "__main__":
 
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
+    comm = MPI.COMM_WORLD  # the global communicator
+    rank = comm.Get_rank() # the index of member
+    size = comm.Get_size() # the total number of members
 
     address_1 = 'AFINN.txt'
     address_2 = 'melbGrid.json'
@@ -134,15 +141,15 @@ if __name__ == "__main__":
         grid = generate_grid_dict(address_2)
         data_to_share = split_data(address_4, size)  ## use smallTwitter in this demo
 
-    afinn = comm.bcast(afinn, root=0)
-    grid = comm.bcast(grid, root=0)
-    data_to_process = comm.scatter(data_to_share, root=0)
+    afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
+    grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
+    data_to_process = comm.scatter(data_to_share, root=0) # scatter the splitted data chunks to each member
     
 
-    small_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid)
-    small_sums = comm.gather(small_sum, root=0)
+    small_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid) # do parallel computing of sentimental scores
+    small_sums = comm.reduce(small_sum, op=gather_result, root=0) # change comm.gather to comm.reduce
 
     if rank == 0:
-        res = reduce(gather_result, small_sums)
-        print('The sentimental sum of small twitter dataset is: %s' % res)
-        print('The sentimental sum of small twitter dataset is: %s' % res['C2'])
+        #res = reduce(gather_result, small_sums)
+        print('The sentimental sum of small twitter dataset is: %s' % small_sums)
+        print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])
