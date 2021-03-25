@@ -2,6 +2,7 @@ import json
 from mpi4py import MPI
 import math
 import pandas as pd
+pd.set_option('display.max_columns', None)  ## display all columns of out output
 
 
 #########################################
@@ -184,4 +185,4 @@ if __name__ == "__main__":
     if rank == 0:
         print('The sentimental sum of twitter dataset is:')
         print(senti_sums)
-        #print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])
+        #print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])``
