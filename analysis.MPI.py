@@ -72,6 +72,13 @@ def calculate_senti_sum_in_parallel(data, afinn, grid):
     sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score'])
     return sentiment_sums
 
+#########################################
+# param:
+#     location: the location data of a tweet
+#     grid: the dict of grid information 
+# return:
+#     grid code: the code name of grid where the denoted location is at
+########################################## 
 def find_grid(location, grid):
     xPos = location[0]
     yPos = location[1]
@@ -90,6 +97,17 @@ def find_grid(location, grid):
             return key
     return grid_code
 
+
+#########################################
+# param:
+#     text: the sentence of the tweet
+#     afinn: the dict to map sentimental vocabs into num
+#     sentiment_sums: the sum of sentimental score in tweets
+#     grid_code: the code name of grid
+# return:
+#     tokenize the sentence as required and adding up the sentimental score
+#     of words which are matched by affin dict
+########################################## 
 def match_sentimental_words(text, afinn, sentiment_sums, grid_code):
     words = re.split(r'[\s\,\.\!\?\'\"]+', text)
     for word in words:
@@ -130,14 +148,14 @@ def mapping_id_to_gc(gc_id):
 ########################################## 
 
 def split_data(path, size):
+    array_to_share = []
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
-        array_to_share=[[] for i in range(size)]
         rows = data['rows']
-        line = 0
-        for row in rows:
-            array_to_share[line % size].append(row)
-            line += 1
+        chunk_size = int(math.ceil(float(len(rows)) / size))
+        for i in range(size):
+            chunk = rows[i * chunk_size : (i + 1) * chunk_size]
+            array_to_share.append(chunk)
     return array_to_share
 
 #########################################
@@ -153,13 +171,13 @@ def gather_result(x,y):
     x['#Overall Sentiment Score'] = x['#Overall Sentiment Score'] + y['#Overall Sentiment Score']
     return x
 
-def read_twitter_data(address):
-    tweets = []
-    with open(address, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-        tweets = data['rows']
-    return tweets
-
+#########################################
+# param:
+#     num: a number, maybe positive or negative 
+# return:
+#     the signed string of number
+#     e.g 20 -> '+20', 0 -> '0', -15 -> '-15'     
+##########################################
 def intToPositiveStr(num):
     return '+' + str(num) if num > 0 else str(num)
 
