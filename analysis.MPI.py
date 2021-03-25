@@ -2,6 +2,7 @@ import json
 from mpi4py import MPI
 import math
 import pandas as pd
+import re
 pd.set_option('display.max_columns', None)  ## display all columns of out output
 
 
@@ -61,33 +62,39 @@ def calculate_senti_sum_in_parallel(data, afinn, grid):
     sentiment_sums = []
     for i in range(len(grid.keys())):
         sentiment_sums.append([mapping_id_to_gc(i), 0, 0])
-    special_ends = ['!', ',', '?', '.', '\'', '\"']
     for row in data:
         location = row['value']['geometry']['coordinates']
-        xPos = location[0]
-        yPos = location[1]
-        grid_code = ''
-        for key, value in grid.items():
-            xMin = value['xmin']
-            xMax = value['xmax']
-            yMin = value['ymin']
-            yMax = value['ymax']
-            x_offset = 0 if xPos != xMin else -1
-            y_offset = 0 if yPos != yMin else 1
-            if xPos >= xMin and xPos <= xMax and yPos >= yMin and yPos < yMax:
-                numCode = str(int(key[1]) + x_offset) if int(key[1]) + x_offset >= 1 else key[1]
-                alphaCode = chr(ord(key[0]) + y_offset) if ord(key[0]) + y_offset <= 68 else key[0]
-                grid_code = grid_code + alphaCode + numCode
-        sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1
-        text = row['value']['properties']['text'].lower()
-        words = text.split()
-        for word in words:
-            while word[-1] in special_ends and len(word) > 1:
-                word = word[0:len(word)-1]
-            if word in afinn.keys():
-                sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[word]
+        grid_code = find_grid(location, grid)
+        if grid_code != '':
+            sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1
+            text = row['value']['properties']['text'].lower()
+            match_sentimental_words(text, afinn, sentiment_sums, grid_code)
     sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score'])
     return sentiment_sums
+
+def find_grid(location, grid):
+    xPos = location[0]
+    yPos = location[1]
+    grid_code = ''
+    for key, value in grid.items():
+        xMin = value['xmin']
+        xMax = value['xmax']
+        yMin = value['ymin']
+        yMax = value['ymax']
+        #x_offset = 0 if xPos != xMin else -1
+        #y_offset = 0 if yPos != yMin else 1
+        if xPos >= xMin and xPos < xMax and yPos > yMin and yPos <= yMax:
+            # numCode = str(int(key[1]) + x_offset) if int(key[1]) + x_offset >= 1 else key[1]
+            # alphaCode = chr(ord(key[0]) + y_offset) if ord(key[0]) + y_offset <= 68 else key[0]
+            # grid_code = grid_code + alphaCode + numCode
+            return key
+    return grid_code
+
+def match_sentimental_words(text, afinn, sentiment_sums, grid_code):
+    words = re.split(r'[\s\,\.\!\?\'\"]+', text)
+    for word in words:
+        if word in afinn.keys():
+            sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[word]
 
 #########################################
 # param:
@@ -153,6 +160,9 @@ def read_twitter_data(address):
         tweets = data['rows']
     return tweets
 
+def intToPositiveStr(num):
+    return '+' + str(num) if num > 0 else str(num)
+
 
 if __name__ == "__main__":
 
@@ -164,6 +174,7 @@ if __name__ == "__main__":
     address_2 = 'melbGrid.json'
     address_3 = 'tinyTwitter.json'
     address_4 = 'smallTwitter.json'
+    address_5 = 'bigTwitter.json'
 
     afinn, grid, data_to_share = None, None, None
 
@@ -183,6 +194,7 @@ if __name__ == "__main__":
     senti_sums = comm.reduce(senti_sum, op=gather_result, root=0) # change comm.gather to comm.reduce
 
     if rank == 0:
+        senti_sums['#Overall Sentiment Score'] = senti_sums['#Overall Sentiment Score'].apply(intToPositiveStr)
         print('The sentimental sum of twitter dataset is:')
         print(senti_sums)
         #print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])``
