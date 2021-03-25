@@ -1,5 +1,7 @@
 import json
 from mpi4py import MPI
+import math
+import pandas as pd
 
 
 #########################################
@@ -55,9 +57,9 @@ def generate_grid_dict(address):
 #                     Eg. Cell -> #Total Tweets, #Overall Sentiment Score
 ########################################## 
 def calculate_senti_sum_in_parallel(data, afinn, grid):
-    sentiment_sums = {}
-    for key in grid.keys():
-        sentiment_sums[key] = {'#Total Tweets' : 0, '#Overall Sentiment Score' : 0}
+    sentiment_sums = []
+    for i in range(len(grid.keys())):
+        sentiment_sums.append([mapping_id_to_gc(i), 0, 0])
     special_ends = ['!', ',', '?', '.', '\'', '\"']
     for row in data:
         location = row['value']['geometry']['coordinates']
@@ -75,15 +77,40 @@ def calculate_senti_sum_in_parallel(data, afinn, grid):
                 numCode = str(int(key[1]) + x_offset) if int(key[1]) + x_offset >= 1 else key[1]
                 alphaCode = chr(ord(key[0]) + y_offset) if ord(key[0]) + y_offset <= 68 else key[0]
                 grid_code = grid_code + alphaCode + numCode
-        sentiment_sums[grid_code]['#Total Tweets'] += 1
+        sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1
         text = row['value']['properties']['text'].lower()
         words = text.split()
         for word in words:
             while word[-1] in special_ends and len(word) > 1:
                 word = word[0:len(word)-1]
             if word in afinn.keys():
-                sentiment_sums[grid_code]['#Overall Sentiment Score'] += afinn[word]
+                sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[word]
+    sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score'])
     return sentiment_sums
+
+#########################################
+# param:
+#     grid_code: the code name of grid
+# return:
+#     the id representing the grid code    
+##########################################
+def mapping_gc_to_id(grid_code):
+    gc_map = {'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3, 
+              'B1': 4, 'B2': 5, 'B3': 6, 'B4': 7,
+              'C1': 8, 'C2': 9, 'C3': 10, 'C4': 11, 'C5': 12,
+              'D3': 13, 'D4': 14, 'D5': 15}
+    return gc_map[grid_code]
+
+#########################################
+# param:
+#     gc_id: the id representing the grid code
+# return:
+#     gthe code name of grid   
+##########################################
+def mapping_id_to_gc(gc_id):
+    id_map = ['A1', 'A2', 'A3', 'A4', 'B1', 'B2', 'B3', 'B4',
+              'C1', 'C2', 'C3', 'C4', 'C5', 'D3', 'D4', 'D5']
+    return id_map[gc_id]
 
 #########################################
 # param:
@@ -114,10 +141,16 @@ def split_data(path, size):
 #        between previous x and y     
 ########################################## 
 def gather_result(x,y):
-    for k1,v1 in y.items():
-        for k2,v2 in v1.items():
-            x[k1][k2] += v2 
+    x['#Total Tweets'] = x['#Total Tweets'] + y['#Total Tweets']
+    x['#Overall Sentiment Score'] = x['#Overall Sentiment Score'] + y['#Overall Sentiment Score']
     return x
+
+def read_twitter_data(address):
+    tweets = []
+    with open(address, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        tweets = data['rows']
+    return tweets
 
 
 if __name__ == "__main__":
@@ -133,9 +166,9 @@ if __name__ == "__main__":
 
     afinn, grid, data_to_share = None, None, None
 
-    ## broadcast Affin and Grid to every member in group, and then;
-    ## scatter Twitter data to every member in group to process (including root), and then;
-    ## gather data and return the result
+    # broadcast Affin and Grid to every member in group, and then;
+    # scatter Twitter data to every member in group to process (including root), and then;
+    # gather data and return the result
     if rank == 0 :
         afinn = generate_Affin_Dict(address_1)
         grid = generate_grid_dict(address_2)
@@ -144,12 +177,11 @@ if __name__ == "__main__":
     afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
     grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
     data_to_process = comm.scatter(data_to_share, root=0) # scatter the splitted data chunks to each member
-    
 
-    small_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid) # do parallel computing of sentimental scores
-    small_sums = comm.reduce(small_sum, op=gather_result, root=0) # change comm.gather to comm.reduce
+    senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid) # do parallel computing of sentimental scores
+    senti_sums = comm.reduce(senti_sum, op=gather_result, root=0) # change comm.gather to comm.reduce
 
     if rank == 0:
-        #res = reduce(gather_result, small_sums)
-        print('The sentimental sum of small twitter dataset is: %s' % small_sums)
-        print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])
+        print('The sentimental sum of twitter dataset is:')
+        print(senti_sums)
+        #print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])
