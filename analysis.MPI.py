@@ -131,7 +131,6 @@ def match_sentimental_words(text, afinn, sentiment_sums, grid_code):
             j += 1
             if temp in afinn.keys():
                 matched_word = temp
-                break
         if matched_word == '':
             i += 1
         else:
