@@ -3,8 +3,9 @@ from mpi4py import MPI
 import math
 import pandas as pd
 import re
+import ijson
+from functools import reduce
 pd.set_option('display.max_columns', None)  ## display all columns of out output
-
 
 #########################################
 # param:
@@ -62,14 +63,22 @@ def calculate_senti_sum_in_parallel(data, afinn, grid):
     sentiment_sums = []
     for i in range(len(grid.keys())):
         sentiment_sums.append([mapping_id_to_gc(i), 0, 0])
-    for row in data:
-        location = row['value']['geometry']['coordinates']
+    for tweet in data:
+        location = tweet['location']
         grid_code = find_grid(location, grid)
         if grid_code != '':
             sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1
-            text = row['value']['properties']['text'].lower()
+            text = tweet['text'].lower()
             match_sentimental_words(text, afinn, sentiment_sums, grid_code)
     sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score'])
+    # for row in data:
+    #     location = row['value']['geometry']['coordinates']
+    #     grid_code = find_grid(location, grid)
+    #     if grid_code != '':
+    #         sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1
+    #         text = row['value']['properties']['text'].lower()
+    #         match_sentimental_words(text, afinn, sentiment_sums, grid_code)
+    # sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score'])
     return sentiment_sums
 
 #########################################
@@ -147,16 +156,49 @@ def mapping_id_to_gc(gc_id):
 #     and return the array of splitted data      
 ########################################## 
 
-def split_data(path, size):
-    array_to_share = []
+def split_data_and_process(path, size, comm, rank, afinn, grid):
+    # array_to_share = []
+    # with open(path, 'r', encoding='utf-8') as f:
+    #     data = json.load(f)
+    #     rows = data['rows']
+    #     chunk_size = int(math.ceil(float(len(rows)) / size))
+    #     for i in range(size):
+    #         chunk = rows[i * chunk_size : (i + 1) * chunk_size]
+    #         array_to_share.append(chunk)
+    # return array_to_share
+    data_to_share = []
+    tweet = {}
+    senti_sums_splits = []
     with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-        rows = data['rows']
-        chunk_size = int(math.ceil(float(len(rows)) / size))
-        for i in range(size):
-            chunk = rows[i * chunk_size : (i + 1) * chunk_size]
-            array_to_share.append(chunk)
-    return array_to_share
+        for prefix, event, value in ijson.parse(f):
+            if prefix.endswith('.properties.text'):
+                tweet['text'] = value
+            if prefix.endswith('.geometry.coordinates.item'):
+                if not 'location' in tweet.keys():
+                    tweet['location'] = [value]
+                else:
+                    tweet['location'].append(value)
+            if 'location' in tweet.keys() and 'text' in tweet.keys() and len(tweet['location']) == 2:
+                data_to_share.append(tweet)
+                tweet = {}
+            if len(data_to_share) == size * 100:
+                datas = [data_to_share[i * 100 : (i + 1) * 100] for i in range(size)]
+                data_to_process = comm.scatter(datas, root=0)
+                senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid)
+                senti_sums_split = comm.reduce(senti_sum, op=gather_result, root=0)
+                if rank == 0:
+                    senti_sums_splits.append(senti_sums_split)
+                data_to_share = [] 
+    if rank == 0:
+        if len(data_to_share) > 0:
+            senti_sum = calculate_senti_sum_in_parallel(data_to_share, afinn, grid)
+            senti_sums_splits.append(senti_sum)
+        senti_sums_total = reduce(gather_result, senti_sums_splits)
+        senti_sums_total['#Overall Sentiment Score'] = senti_sums_total['#Overall Sentiment Score'].apply(intToPositiveStr)
+        print('The sentimental sum of twitter dataset is:')
+        print(senti_sums_total)
+
+
 
 #########################################
 # param:
@@ -202,17 +244,20 @@ if __name__ == "__main__":
     if rank == 0 :
         afinn = generate_Affin_Dict(address_1)
         grid = generate_grid_dict(address_2)
-        data_to_share = split_data(address_4, size)  ## use smallTwitter in this demo
+        #data_to_share = split_data(address_4, size)  ## use smallTwitter in this demo
 
     afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
     grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
-    data_to_process = comm.scatter(data_to_share, root=0) # scatter the splitted data chunks to each member
+    
+    split_data_and_process(address_4, size, comm, rank, afinn, grid)
 
-    senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid) # do parallel computing of sentimental scores
-    senti_sums = comm.reduce(senti_sum, op=gather_result, root=0) # change comm.gather to comm.reduce
+    # data_to_process = comm.scatter(data_to_share, root=0) # scatter the splitted data chunks to each member
 
-    if rank == 0:
-        senti_sums['#Overall Sentiment Score'] = senti_sums['#Overall Sentiment Score'].apply(intToPositiveStr)
-        print('The sentimental sum of twitter dataset is:')
-        print(senti_sums)
-        #print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])``
+    # senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid) # do parallel computing of sentimental scores
+    # senti_sums = comm.reduce(senti_sum, op=gather_result, root=0) # change comm.gather to comm.reduce
+
+    # if rank == 0:
+    #     senti_sums['#Overall Sentiment Score'] = senti_sums['#Overall Sentiment Score'].apply(intToPositiveStr)
+    #     print('The sentimental sum of twitter dataset is:')
+    #     print(senti_sums)
+    #     #print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])``
