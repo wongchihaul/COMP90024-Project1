@@ -5,6 +5,7 @@ import pandas as pd
 import re
 import ijson
 from functools import reduce
+import argparse
 pd.set_option('display.max_columns', None)  ## display all columns of out output
 
 #########################################
@@ -224,27 +225,32 @@ def intToPositiveStr(num):
     return '+' + str(num) if num > 0 else str(num)
 
 
-if __name__ == "__main__":
+parser = argparse.ArgumentParser(description='Path of files to be processed')
+parser.add_argument('--grid', type=str,  default='melbGrid.json', help='Path to Melbourne Grid json file')
+parser.add_argument('--afinn', type=str,  default='AFINN.txt', help='Path to AFINN text file')
+parser.add_argument('--tweet', type=str,  default='tinyTwitter.json', help='Path to Twitter data json')
+args = parser.parse_args()
 
+def main():
     comm = MPI.COMM_WORLD  # the global communicator
     rank = comm.Get_rank() # the index of member
     size = comm.Get_size() # the total number of members
 
-    address_1 = 'AFINN.txt'
-    address_2 = 'melbGrid.json'
-    address_3 = 'tinyTwitter.json'
-    address_4 = 'smallTwitter.json'
-    address_5 = 'bigTwitter.json'
+    # address_1 = 'AFINN.txt'
+    # address_2 = 'melbGrid.json'
+    # address_3 = 'tinyTwitter.json'
+    # address_4 = 'smallTwitter.json'
+    # address_5 = 'bigTwitter.json'
 
     afinn, grid, data_to_share = None, None, None
 
     # broadcast Affin and Grid to every member in group, and then;
     # scatter Twitter data to every member in group to process (including root), and then;
     # gather data and return the result
+
     if rank == 0 :
-        afinn = generate_Affin_Dict(address_1)
-        grid = generate_grid_dict(address_2)
-        #data_to_share = split_data(address_4, size)  ## use smallTwitter in this demo
+        afinn = generate_Affin_Dict(args.afinn)
+        grid = generate_grid_dict(args.grid)
 
     afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
     grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
@@ -261,3 +267,4 @@ if __name__ == "__main__":
     #     print('The sentimental sum of twitter dataset is:')
     #     print(senti_sums)
     #     #print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])``
+
