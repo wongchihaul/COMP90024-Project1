@@ -120,9 +120,27 @@ def find_grid(location, grid):
 ########################################## 
 def match_sentimental_words(text, afinn, sentiment_sums, grid_code):
     words = re.split(r'[\s\,\.\!\?\'\"]+', text)
-    for word in words:
-        if word in afinn.keys():
-            sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[word]
+    i = 0
+    while i < len(words) - 1:
+        selected_words = words[i:]
+        temp = selected_words[0]
+        matched_word = ''
+        j = 1
+        while j < len(selected_words):
+            temp = ' '.join([temp, selected_words[j]])
+            j += 1
+            if temp in afinn.keys():
+                matched_word = temp
+                break
+        if matched_word == '':
+            i += 1
+        else:
+            sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
+            i += j
+
+
+            
+            
 
 #########################################
 # param:
