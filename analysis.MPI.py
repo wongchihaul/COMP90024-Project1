@@ -247,7 +247,7 @@ def main():
     # broadcast Affin and Grid to every member in group, and then;
     # scatter Twitter data to every member in group to process (including root), and then;
     # gather data and return the result
-
+    
     if rank == 0 :
         afinn = generate_Affin_Dict(args.afinn)
         grid = generate_grid_dict(args.grid)
@@ -255,7 +255,7 @@ def main():
     afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
     grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
     
-    split_data_and_process(address_4, size, comm, rank, afinn, grid)
+    split_data_and_process(args.tweet, size, comm, rank, afinn, grid)
 
     # data_to_process = comm.scatter(data_to_share, root=0) # scatter the splitted data chunks to each member
 
@@ -268,3 +268,5 @@ def main():
     #     print(senti_sums)
     #     #print('The sentimental sum of small twitter dataset is: %s' % small_sums['C2'])``
 
+if __name__ == "__main__":
+    main()
