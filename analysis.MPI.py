@@ -21,11 +21,7 @@ def generate_Affin_Dict(address):
             kv = line.strip().split()
             # for the splitted words, except for the last word as score, the rest words make up the token to be matched
             token = ' '.join(kv[0:len(kv) - 1]) 
-            num = 0
-            if kv[-1][0] == '-':
-                num = -1 * int(kv[-1][1:]) # handle the conversion of negative 
-            else:
-                num = int(kv[-1])
+            num = int(kv[-1])
             afinn[token] = num # append into the dict
     return afinn
 
@@ -115,21 +111,18 @@ def find_grid(location, grid):
 def match_sentimental_words(text, afinn, sentiment_sums, grid_code):
     words = re.split(r'[\s\,\.\!\?\'\"]+', text) # special endings ,.!?'"
     i = 0
-    while i < len(words): # MaxMatch algorithm
-        selected_words = words[i:] # intercepted words list from the original
-        temp = selected_words[0] # start from the first word
-        matched_word = '' if not temp in afinn.keys() else temp # word in match
-        j = 1
-        while j < len(selected_words):
-            temp = ' '.join([temp, selected_words[j]]) # 'can't' + 'stand' = 'can't stand'
-            j += 1
-            if temp in afinn.keys():
-                matched_word = temp # update word in match
-        if matched_word == '':
-            i += 1 # no match found and shift index to right
+    while i < len(words):  # MaxMatch algorithm
+        matched_word = None
+        for j in range(len(words), i, -1):  # Moving right pointer from tail to head
+            temp = ' '.join(words[i:j])
+            if temp in afinn.keys():    # if matches, it can guarantee that this word is the maximum matching word 
+                matched_word = temp
+                break
+        if matched_word is None:
+            i += 1
         else:
             sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
-            i += j # match found and shift index to right by length j
+            i = j   # derived from i += j - i
 
 
 #########################################
