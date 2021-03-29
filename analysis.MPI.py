@@ -92,12 +92,12 @@ def find_grid(location, grid):
         xMax = value['xmax']
         yMin = value['ymin']
         yMax = value['ymax']
-        if xPos >= xMin and xPos < xMax and yPos > yMin and yPos <= yMax:
+        if xPos > xMin and xPos <= xMax and yPos > yMin and yPos <= yMax:
             # Requirement: B1/B2 choose B1, the left;
             #              B2/C2 choose C2, the below;
             # B1(xmin = 144.7, xmax = 144.85), B2(xmin = 144.85, xmax = 145)
-            # So if x = 144.85 which is x >= xmin, assign grid code B2
-            # B2(ymin = -37.8, ymax = -37.65), C2(ymin = -37.95, xmax = -37.8)
+            # So if x = 144.85 which is x <= xmax, assign grid code B1
+            # B2(ymin = -37.8, ymax = -37.65), C2(ymin = -37.95, ymax = -37.8)
             # So if y = -37.8 which is y <= ymax, assign grid code C2
             return key
     return grid_code
