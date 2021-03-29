@@ -67,11 +67,11 @@ def calculate_senti_sum_in_parallel(data, afinn, grid, maxW):
     for i in range(len(grid.keys())):
         sentiment_sums.append([mapping_id_to_gc(i), 0, 0]) # create 15 rows of grids
     for tweet in data:
-        location = tweet['location']
+        location = tweet['value']['geometry']['coordinates']
         grid_code = find_grid(location, grid) # Get grid code according to location
         if grid_code != '': # Skip if no grid code found
             sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1 # tweet count adding up
-            text = tweet['text'].lower() # handle sensitive cases by lowercase
+            text = tweet['value']['properties']['text'].lower() # handle sensitive cases by lowercase
             match_sentimental_words(text, afinn, sentiment_sums, grid_code, maxW) # match vocabs with afinn dict and add up sentimental scores
     sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score']) # output the dataframe result
     return sentiment_sums
@@ -117,32 +117,33 @@ def find_grid(location, grid):
 def match_sentimental_words(text, afinn, sentiment_sums, grid_code, maxW):
     words = re.split(r'[\s\,\.\!\?\'\"]+', text) # special endings ,.!?'"
     i = 0
-    while i < len(words):  # MaxMatch algorithm
-        selected_words = words[i:]
-        temp = selected_words[0]
-        matched_word = '' if not temp in afinn.keys() else temp
-        j = 1
-        while j < len(selected_words) and j + 1 <= maxW:
-            temp = ' '.join([temp, selected_words[j]])
-            j += 1
-            if temp in afinn.keys():
+    # while i < len(words):  # MaxMatch algorithm
+    #     selected_words = words[i:]
+    #     temp = selected_words[0]
+    #     matched_word = '' if not temp in afinn.keys() else temp
+    #     j = 1
+    #     while j < len(selected_words) and j + 1 <= maxW:
+    #         temp = ' '.join([temp, selected_words[j]])
+    #         j += 1
+    #         if temp in afinn.keys():
+    #             matched_word = temp
+    #     if matched_word is '':
+    #         i += 1
+    #     else:
+    #         sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
+    #         i += len(matched_word.split())
+    while i < len(words):
+        matched_word = None
+        for j in range(len(words), i, -1):  # Moving right pointer from tail to head
+            temp = ' '.join(words[i:j])
+            if temp in afinn.keys():    # if matches, it can guarantee that this word is the maximum matching word 
                 matched_word = temp
-        if matched_word is '':
+                break
+        if matched_word is None:
             i += 1
         else:
             sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
-            i += len(matched_word.split())
-        # matched_word = None
-        # for j in range(len(words), i, -1):  # Moving right pointer from tail to head
-        #     temp = ' '.join(words[i:j])
-        #     if temp in afinn.keys():    # if matches, it can guarantee that this word is the maximum matching word 
-        #         matched_word = temp
-        #         break
-        # if matched_word is None:
-        #     i += 1
-        # else:
-        #     sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
-        #     i = j   # derived from i += j - i
+            i = j   # derived from i += j - i
 
 
 #########################################
@@ -189,18 +190,20 @@ def split_data_and_process(path, size, comm, rank, afinn, grid, maxW):
     senti_sums_splits = [] # the splitted scores
     m = 100
     with open(path, 'r', encoding='utf-8') as f:
-        for prefix, event, value in ijson.parse(f): # read json iterately
-            if prefix.endswith('.properties.text'):
-                tweet['text'] = value # append the text of tweet
-            if prefix.endswith('.geometry.coordinates.item'):
-                if not 'location' in tweet.keys():
-                    tweet['location'] = [value] # append the xpos of tweet
-                else:
-                    tweet['location'].append(value) # append the ypos of tweet
-            if 'location' in tweet.keys() and 'text' in tweet.keys() and len(tweet['location']) == 2:
-                # apend the tweet into share list only if it is valid
-                data_to_share.append(tweet) 
-                tweet = {}
+        # for prefix, event, value in ijson.parse(f): # read json iterately
+        #     if prefix.endswith('.properties.text'):
+        #         tweet['text'] = value # append the text of tweet
+        #     if prefix.endswith('.geometry.coordinates.item'):
+        #         if not 'location' in tweet.keys():
+        #             tweet['location'] = [value] # append the xpos of tweet
+        #         else:
+        #             tweet['location'].append(value) # append the ypos of tweet
+        #     if 'location' in tweet.keys() and 'text' in tweet.keys() and len(tweet['location']) == 2:
+        #         # apend the tweet into share list only if it is valid
+        #         data_to_share.append(tweet) 
+        #         tweet = {}
+        for tweet in ijson.items(f, 'rows.item'):
+            data_to_share.append(tweet) 
             if len(data_to_share) == size * m:
                 datas = [data_to_share[i * m : (i + 1) * m] for i in range(size)] # create the iterable data list for sharing
                 data_to_process = comm.scatter(datas, root=0) # scatter data from rank 0 task to all active tasks

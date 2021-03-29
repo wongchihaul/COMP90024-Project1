@@ -98,9 +98,8 @@ if __name__ == "__main__":
     address_4 = 'smallTwitter.json'
 
     with open(address_3, 'r', encoding='utf-8') as f:
-        for prefix, event, value in ijson.parse(f):
-            if prefix.endswith('.geometry.coordinates.item'):
-                print(value)
+        for row in ijson.items(f, 'rows.item'):
+            print(row)
 
     # afinn = generate_Affin_Dict(address_1)
     # grid = generate_grid_dict(address_2)
