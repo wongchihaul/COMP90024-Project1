@@ -115,7 +115,8 @@ def find_grid(location, grid):
 #     of words which are matched by affin dict
 ###################################################################
 def match_sentimental_words(text, afinn, sentiment_sums, grid_code, maxW):
-    words = re.split(r'[\s\,\.\!\?\'\"]+', text) # special endings ,.!?'"
+    words = re.split(r'[\s]+', text) # split sentence into words using re
+    special_endings = [',', '.', '!', '?', '\'', '\"'] # special endings ,.!?'"
     i = 0
     # while i < len(words):  # MaxMatch algorithm
     #     selected_words = words[i:]
@@ -127,7 +128,7 @@ def match_sentimental_words(text, afinn, sentiment_sums, grid_code, maxW):
     #         j += 1
     #         if temp in afinn.keys():
     #             matched_word = temp
-    #     if matched_word is '':
+    #     if matched_word == '':
     #         i += 1
     #     else:
     #         sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
@@ -136,6 +137,8 @@ def match_sentimental_words(text, afinn, sentiment_sums, grid_code, maxW):
         matched_word = None
         for j in range(len(words), i, -1):  # Moving right pointer from tail to head
             temp = ' '.join(words[i:j])
+            while len(temp) >= 1 and temp[-1] in special_endings:
+                temp = temp[:-1]
             if temp in afinn.keys():    # if matches, it can guarantee that this word is the maximum matching word 
                 matched_word = temp
                 break
