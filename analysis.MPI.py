@@ -97,19 +97,16 @@ def generate_grid_dict(address, comm, size, rank):
 #                     Eg. Cell #Total Tweets, #Overall Sentiment Score
 #                           A1          1234                        25
 ############################################################################
-def calculate_senti_sum_in_parallel(tweets, afinn, grid):
-    sentiment_sums = []
-    for i in range(len(grid.keys())):
-        sentiment_sums.append([mapping_id_to_gc(i), 0, 0]) # create 15 rows of grids
-    for tweet in tweets:
-        location = tweet['value']['geometry']['coordinates']
-        grid_code = find_grid(location, grid) # Get grid code according to location
-        if grid_code != '': # Skip if no grid code found
-            sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1 # tweet count adding up
-            text = tweet['value']['properties']['text'].lower() # handle sensitive cases by lowercase
-            match_sentimental_words(text, afinn, sentiment_sums, grid_code) # match vocabs with afinn dict and add up sentimental scores
-    sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score']) # output the dataframe result
-    return sentiment_sums
+def calculate_senti_sum_in_parallel(senti_sums, tweet, afinn, grid):
+    # for tweet in tweets:
+    location = tweet['value']['geometry']['coordinates']
+    grid_code = find_grid(location, grid) # Get grid code according to location
+    if grid_code != '': # Skip if no grid code found
+        senti_sums[mapping_gc_to_id(grid_code)][1] += 1 # tweet count adding up
+        text = tweet['value']['properties']['text'].lower() # handle sensitive cases by lowercase
+        match_sentimental_words(text, afinn, senti_sums, grid_code) # match vocabs with afinn dict and add up sentimental scores
+    # sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score']) # output the dataframe result
+    # return senti_sums
 
 ################################################################# 
 # param:
@@ -227,8 +224,10 @@ def mapping_id_to_gc(gc_id):
 def split_data_and_process(path, size, comm, rank, afinn, grid):
     data_to_process = [] # list for storing the shared tweet data
     senti_sums_splits = [] # the splitted scores
-    m = 1000
-    senti_sums_chunk = pd.DataFrame(columns=['Cell', '#Total Tweets', '#Overall Sentiment Score'])
+    # m = 1000
+    senti_sums_chunk = []
+    for i in range(len(grid.keys())):
+        senti_sums_chunk.append([mapping_id_to_gc(i), 0, 0]) # create 15 rows of grids
     with open(path, 'r', encoding='utf-8') as f:
         with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
             offset = mm.size() / size
@@ -254,16 +253,18 @@ def split_data_and_process(path, size, comm, rank, afinn, grid):
                 else:
                     continue    
                 tweet = line 
-                data_to_process.append(tweet)
-                if len(data_to_process) == size:
-                    senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid)
-                    senti_sums_splits.append(senti_sum)
-                    data_to_process = []
-    if len(data_to_process) > 0:
-        senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid)
-        senti_sums_splits.append(senti_sum)
-        data_to_process = []
-    senti_sums_chunk = reduce(gather_result, senti_sums_splits)
+                calculate_senti_sum_in_parallel(senti_sums_chunk, tweet, afinn, grid)
+    #             data_to_process.append(tweet)
+    #             if len(data_to_process) == size:
+    #                 senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid)
+    #                 senti_sums_splits.append(senti_sum)
+    #                 data_to_process = []
+    # if len(data_to_process) > 0:
+    #     senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid)
+    #     senti_sums_splits.append(senti_sum)
+    #     data_to_process = []
+    # senti_sums_chunk = reduce(gather_result, senti_sums_splits)
+    senti_sums_chunk = pd.DataFrame(senti_sums_chunk, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score'])
     senti_sums_total = comm.reduce(senti_sums_chunk, op=gather_result, root=0)
     if rank == 0:
         senti_sums_total['#Overall Sentiment Score'] = senti_sums_total['#Overall Sentiment Score'].apply(intToPositiveStr) # change int to string with signs
