@@ -196,8 +196,9 @@ def mapping_id_to_gc(gc_id):
 
 def split_data_and_process(path, size, comm, rank, afinn, grid):
     # data_to_share = [] # list for storing the shared tweet data
-    senti_sums_splits = [] # the splitted scores
-    m = 100
+    # senti_sums_splits = [] # the splitted scores
+    m = 1000
+    senti_sums_chunk = pd.DataFrame()
     with open(path, 'r', encoding='utf-8') as f:
         # for prefix, event, value in ijson.parse(f): # read json iterately
         #     if prefix.endswith('.properties.text'):
@@ -215,10 +216,12 @@ def split_data_and_process(path, size, comm, rank, afinn, grid):
         for tweet in ijson.items(f, 'rows.item'):
             if i % size == rank:
                 senti_sum = calculate_senti_sum_in_parallel(tweet, afinn, grid)
-                senti_sums_splits.append(senti_sum)
+                if senti_sums_chunk.empty:
+                    senti_sums_chunk = senti_sum
+                else:
+                    senti_sums_chunk = gather_result(senti_sums_chunk, senti_sum)
             i += 1
-    sneti_sums_chunk = reduce(gather_result, senti_sums_splits)
-    senti_sums_total = comm.reduce(sneti_sums_chunk, op=gather_result, root=0)
+    senti_sums_total = comm.reduce(senti_sums_chunk, op=gather_result, root=0)
     if rank == 0:
         senti_sums_total['#Overall Sentiment Score'] = senti_sums_total['#Overall Sentiment Score'].apply(intToPositiveStr) # change int to string with signs
         print('The sentimental sum of twitter dataset is:')
