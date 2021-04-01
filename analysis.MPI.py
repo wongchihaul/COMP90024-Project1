@@ -7,6 +7,7 @@ import ijson
 from functools import reduce
 import argparse
 from datetime import datetime
+import mmap
 pd.set_option('display.max_columns', None)  ## display all columns of out output
 
 #########################################
@@ -19,16 +20,27 @@ pd.set_option('display.max_columns', None)  ## display all columns of out output
 def generate_Affin_Dict(address, comm, size, rank):
     afinn = {}
     with open(address, 'r') as f:
-        i = 0
-        for line in f.readlines(): # Read by lines
-            if i % size == rank:
+        with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
+            offset = mm.size() / size
+            mm.seek(int(rank * offset))
+            i = 0
+            start_lines = None
+            for line in iter(mm.readline, b''): # Read by lines
+                line = str(line, encoding='utf-8')
+                if rank != 0 and i == 0:
+                    i += 1
+                    continue
+                if not start_lines:
+                    start_lines = {rank : line}
+                    start_lines = comm.allreduce(start_lines, op=gather_dict)
+                if rank < size - 1 and line == start_lines[rank + 1]:
+                    break
                 kv = re.split(r'[\s"]+', line.strip())
                 # for the splitted words, except for the last word as score, the rest words make up the token to be matched
                 token = ' '.join(kv[0:len(kv) - 1]) 
                 num = int(kv[-1])
                 afinn[token] = num # append into the dict
-            i += 1
-    afinn_total = comm.allreduce(afinn, op=gather_dict)    
+    afinn_total = comm.allreduce(afinn, op=gather_dict)
     return afinn_total
 
 ##########################################################
@@ -41,19 +53,36 @@ def generate_Affin_Dict(address, comm, size, rank):
 def generate_grid_dict(address, comm, size, rank):
     grid = {}
     with open(address, 'r') as f:
-        data = json.load(f)
-        i = 0
-        for feature in data['features']:
-            # properties = [id, xmin, xmax, ymin, ymax]
-            if i % size == rank:
+        with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
+            offset = mm.size() / size
+            mm.seek(int(rank * offset))
+            i = 0
+            start_lines = None
+            for line in iter(mm.readline, b''):
+                line = str(line, encoding='utf-8')
+                if rank != 0 and i == 0:
+                    i += 1
+                    continue
+                if not start_lines:
+                    start_lines = {rank : line}
+                    start_lines = comm.allreduce(start_lines, op=gather_dict)
+                if rank < size - 1 and line == start_lines[rank + 1]:
+                    break 
+                if line.endswith('] ] ] } },\n'):
+                    line = json.loads(line[:-2])
+                elif line.endswith('] ] ] } }\n'):
+                    line = json.loads(line[:-1]) 
+                else:
+                    continue    
+                feature = line 
+                # properties = [id, xmin, xmax, ymin, ymax]
                 ID = feature['properties']['id']
                 coords = {}
                 for key, value in feature['properties'].items():
                     if key != 'id':
                         coords[key] = value
                 grid[ID] = coords
-            i += 1
-    grid_total = comm.allreduce(grid, op=gather_dict) 
+    grid_total = comm.allreduce(grid, op=gather_dict)
     return grid_total
 
 
@@ -68,16 +97,17 @@ def generate_grid_dict(address, comm, size, rank):
 #                     Eg. Cell #Total Tweets, #Overall Sentiment Score
 #                           A1          1234                        25
 ############################################################################
-def calculate_senti_sum_in_parallel(tweet, afinn, grid):
+def calculate_senti_sum_in_parallel(tweets, afinn, grid):
     sentiment_sums = []
     for i in range(len(grid.keys())):
         sentiment_sums.append([mapping_id_to_gc(i), 0, 0]) # create 15 rows of grids
-    location = tweet['value']['geometry']['coordinates']
-    grid_code = find_grid(location, grid) # Get grid code according to location
-    if grid_code != '': # Skip if no grid code found
-        sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1 # tweet count adding up
-        text = tweet['value']['properties']['text'].lower() # handle sensitive cases by lowercase
-        match_sentimental_words(text, afinn, sentiment_sums, grid_code) # match vocabs with afinn dict and add up sentimental scores
+    for tweet in tweets:
+        location = tweet['value']['geometry']['coordinates']
+        grid_code = find_grid(location, grid) # Get grid code according to location
+        if grid_code != '': # Skip if no grid code found
+            sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1 # tweet count adding up
+            text = tweet['value']['properties']['text'].lower() # handle sensitive cases by lowercase
+            match_sentimental_words(text, afinn, sentiment_sums, grid_code) # match vocabs with afinn dict and add up sentimental scores
     sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score']) # output the dataframe result
     return sentiment_sums
 
@@ -195,46 +225,61 @@ def mapping_id_to_gc(gc_id):
 ################################################################### 
 
 def split_data_and_process(path, size, comm, rank, afinn, grid):
-    # data_to_share = [] # list for storing the shared tweet data
-    # senti_sums_splits = [] # the splitted scores
+    data_to_process = [] # list for storing the shared tweet data
+    senti_sums_splits = [] # the splitted scores
     m = 1000
-    senti_sums_chunk = pd.DataFrame()
+    senti_sums_chunk = pd.DataFrame(columns=['Cell', '#Total Tweets', '#Overall Sentiment Score'])
     with open(path, 'r', encoding='utf-8') as f:
-        # for prefix, event, value in ijson.parse(f): # read json iterately
-        #     if prefix.endswith('.properties.text'):
-        #         tweet['text'] = value # append the text of tweet
-        #     if prefix.endswith('.geometry.coordinates.item'):
-        #         if not 'location' in tweet.keys():
-        #             tweet['location'] = [value] # append the xpos of tweet
-        #         else:
-        #             tweet['location'].append(value) # append the ypos of tweet
-        #     if 'location' in tweet.keys() and 'text' in tweet.keys() and len(tweet['location']) == 2:
-        #         # apend the tweet into share list only if it is valid
-        #         data_to_share.append(tweet) 
-        #         tweet = {}
-        i = 0
-        for tweet in ijson.items(f, 'rows.item'):
-            if i % size == rank:
-                senti_sum = calculate_senti_sum_in_parallel(tweet, afinn, grid)
-                if senti_sums_chunk.empty:
-                    senti_sums_chunk = senti_sum
+        with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
+            offset = mm.size() / size
+            mm.seek(int(rank * offset))
+            i = 0
+            start_lines = None
+            for line in iter(mm.readline, b''):
+                line = str(line, encoding='utf-8')
+                if rank != 0 and i == 0:
+                    i += 1
+                    continue
+                if not start_lines:
+                    start_lines = {rank : line}
+                    start_lines = comm.allreduce(start_lines, op=gather_dict)
+                if rank < size - 1 and line == start_lines[rank + 1]:
+                    break                  
+                if line.endswith('}},\r\n'):
+                    line = json.loads(line[:-3])
+                elif line.endswith('}}]}\r\n'):
+                    line = json.loads(line[:-4]) 
+                elif line.endswith('}}\r\n'):
+                    line = json.loads(line[:-2])
                 else:
-                    senti_sums_chunk = gather_result(senti_sums_chunk, senti_sum)
-            i += 1
+                    continue    
+                tweet = line 
+                data_to_process.append(tweet)
+                if len(data_to_process) == size:
+                    senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid)
+                    senti_sums_splits.append(senti_sum)
+                    data_to_process = []
+    if len(data_to_process) > 0:
+        senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid)
+        senti_sums_splits.append(senti_sum)
+        data_to_process = []
+    senti_sums_chunk = reduce(gather_result, senti_sums_splits)
     senti_sums_total = comm.reduce(senti_sums_chunk, op=gather_result, root=0)
     if rank == 0:
         senti_sums_total['#Overall Sentiment Score'] = senti_sums_total['#Overall Sentiment Score'].apply(intToPositiveStr) # change int to string with signs
         print('The sentimental sum of twitter dataset is:')
-        print(senti_sums_total)
-    #         data_to_share.append(tweet) 
-    #         if len(data_to_share) == size * m:
-    #             datas = [data_to_share[i * m : (i + 1) * m] for i in range(size)] # create the iterable data list for sharing
-    #             data_to_process = comm.scatter(datas, root=0) # scatter data from rank 0 task to all active tasks
-    #             senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid, maxW) # paraller commputing sentimental scores
-    #             senti_sums_split = comm.reduce(senti_sum, op=gather_result, root=0) # collected the reduced computation results
-    #             if rank == 0:
-    #                 senti_sums_splits.append(senti_sums_split) # append the the compuation result of this batch
-    #             data_to_share = [] # clear the share list and restart
+        print(senti_sums_total)    
+
+        # for tweet in ijson.items(f, 'rows.item'):
+        #     data_to_share.append(tweet) 
+        #     if len(data_to_share) == size * m:
+        #         datas = [data_to_share[i * m : (i + 1) * m] for i in range(size)] # create the iterable data list for sharing
+        #         data_to_process = comm.scatter(datas, root=0) # scatter data from rank 0 task to all active tasks
+        #         senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid) # paraller commputing sentimental scores
+        #         senti_sums_split = comm.reduce(senti_sum, op=gather_result, root=0) # collected the reduced computation results
+        #         if rank == 0:
+        #             senti_sums_splits.append(senti_sums_split) # append the the compuation result of this batch
+        #         data_to_share = [] # clear the share list and restart
     # if len(data_to_share) > 0: # Do the last parallel computing if data is left 
     #     chunk_size = int(math.ceil(float(len(data_to_share)) / size))
     #     datas = [data_to_share[i * chunk_size : (i + 1) * chunk_size] for i in range(size)]
@@ -244,10 +289,33 @@ def split_data_and_process(path, size, comm, rank, afinn, grid):
     #     if rank == 0:
     #         senti_sums_splits.append(senti_sums_split) 
     # if rank == 0:
+    #     if len(data_to_share) > 0:
+    #         senti_sum = calculate_senti_sum_in_parallel(data_to_share, afinn, grid)
+    #         senti_sums_splits.append(senti_sum)
     #     senti_sums_total = reduce(gather_result, senti_sums_splits) # reduce adding up the splitted tweet counts and tweet scores
     #     senti_sums_total['#Overall Sentiment Score'] = senti_sums_total['#Overall Sentiment Score'].apply(intToPositiveStr) # change int to string with signs
     #     print('The sentimental sum of twitter dataset is:')
     #     print(senti_sums_total)
+    #     i = 0
+    #     for tweet in ijson.items(f, 'rows.item'):
+    #         if i % size == rank:
+    #             senti_sum = calculate_senti_sum_in_parallel(tweet, afinn, grid)
+    #             if senti_sums_chunk.empty:
+    #                 senti_sums_chunk = senti_sum
+    #             else:
+    #                 senti_sums_chunk = gather_result(senti_sums_chunk, senti_sum)
+    #             # senti_sums_splits.append(senti_sum)
+    #             # if len(senti_sums_splits) == m:
+    #             #     senti_sums_chunk = reduce(gather_result, senti_sums_splits)
+    #             #     senti_sums_splits = [senti_sums_chunk]
+    #         i += 1
+    # # senti_sums_chunk = reduce(gather_result, senti_sums_splits)
+    # senti_sums_total = comm.reduce(senti_sums_chunk, op=gather_result, root=0)
+    # if rank == 0:
+    #     senti_sums_total['#Overall Sentiment Score'] = senti_sums_total['#Overall Sentiment Score'].apply(intToPositiveStr) # change int to string with signs
+    #     print('The sentimental sum of twitter dataset is:')
+    #     print(senti_sums_total)
+            
 
 
 
@@ -290,18 +358,19 @@ def main():
     rank = comm.Get_rank() # the index of member
     size = comm.Get_size() # the total number of members
     
+    # start_t = datetime.now().timestamp()
     afinn = generate_Affin_Dict(args.afinn, comm, size, rank)
     grid = generate_grid_dict(args.grid, comm, size, rank)
 
+    # afinn, grid = None, None
     # if rank == 0 :
     #     afinn = generate_Affin_Dict(args.afinn)
     #     grid = generate_grid_dict(args.grid)
-    #     # start_t = datetime.now().timestamp()
 
     # afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
     # grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
     # maxW = comm.bcast(maxW, root=0) # broadcast maxW to the other members of the group
-        
+
     split_data_and_process(args.tweet, size, comm, rank, afinn, grid)
     # if rank == 0:
     #     print('Time elapsed: %s' % (datetime.now().timestamp() - start_t))
