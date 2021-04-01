@@ -16,18 +16,20 @@ pd.set_option('display.max_columns', None)  ## display all columns of out output
 #     afinn: the dict to map vocabs into sentimental score
 #     maxW: the max number of words combination
 ########################################## 
-def generate_Affin_Dict(address):
+def generate_Affin_Dict(address, comm, size, rank):
     afinn = {}
-    maxW = 1
     with open(address, 'r') as f:
+        i = 0
         for line in f.readlines(): # Read by lines
-            kv = re.split(r'[\s"]+', line.strip())
-            maxW = max((len(kv) - 1), maxW)
-            # for the splitted words, except for the last word as score, the rest words make up the token to be matched
-            token = ' '.join(kv[0:len(kv) - 1]) 
-            num = int(kv[-1])
-            afinn[token] = num # append into the dict
-    return afinn, maxW
+            if i % size == rank:
+                kv = re.split(r'[\s"]+', line.strip())
+                # for the splitted words, except for the last word as score, the rest words make up the token to be matched
+                token = ' '.join(kv[0:len(kv) - 1]) 
+                num = int(kv[-1])
+                afinn[token] = num # append into the dict
+            i += 1
+    afinn_total = comm.allreduce(afinn, op=gather_dict)    
+    return afinn_total
 
 ##########################################################
 # param:
@@ -36,19 +38,23 @@ def generate_Affin_Dict(address):
 #     grid: the nested dict of grid information. A grid is conceptualized 
 #           by its xmin, xmax, ymin, ymax properties and named by Id
 ########################################################### 
-def generate_grid_dict(address):
+def generate_grid_dict(address, comm, size, rank):
     grid = {}
     with open(address, 'r') as f:
         data = json.load(f)
+        i = 0
         for feature in data['features']:
             # properties = [id, xmin, xmax, ymin, ymax]
-            ID = feature['properties']['id']
-            coords = {}
-            for key, value in feature['properties'].items():
-                if key != 'id':
-                    coords[key] = value
-            grid[ID] = coords
-    return grid
+            if i % size == rank:
+                ID = feature['properties']['id']
+                coords = {}
+                for key, value in feature['properties'].items():
+                    if key != 'id':
+                        coords[key] = value
+                grid[ID] = coords
+            i += 1
+    grid_total = comm.allreduce(grid, op=gather_dict) 
+    return grid_total
 
 
 ###########################################################################
@@ -62,17 +68,16 @@ def generate_grid_dict(address):
 #                     Eg. Cell #Total Tweets, #Overall Sentiment Score
 #                           A1          1234                        25
 ############################################################################
-def calculate_senti_sum_in_parallel(data, afinn, grid, maxW):
+def calculate_senti_sum_in_parallel(tweet, afinn, grid):
     sentiment_sums = []
     for i in range(len(grid.keys())):
         sentiment_sums.append([mapping_id_to_gc(i), 0, 0]) # create 15 rows of grids
-    for tweet in data:
-        location = tweet['value']['geometry']['coordinates']
-        grid_code = find_grid(location, grid) # Get grid code according to location
-        if grid_code != '': # Skip if no grid code found
-            sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1 # tweet count adding up
-            text = tweet['value']['properties']['text'].lower() # handle sensitive cases by lowercase
-            match_sentimental_words(text, afinn, sentiment_sums, grid_code, maxW) # match vocabs with afinn dict and add up sentimental scores
+    location = tweet['value']['geometry']['coordinates']
+    grid_code = find_grid(location, grid) # Get grid code according to location
+    if grid_code != '': # Skip if no grid code found
+        sentiment_sums[mapping_gc_to_id(grid_code)][1] += 1 # tweet count adding up
+        text = tweet['value']['properties']['text'].lower() # handle sensitive cases by lowercase
+        match_sentimental_words(text, afinn, sentiment_sums, grid_code) # match vocabs with afinn dict and add up sentimental scores
     sentiment_sums = pd.DataFrame(sentiment_sums, columns=['Cell', '#Total Tweets', '#Overall Sentiment Score']) # output the dataframe result
     return sentiment_sums
 
@@ -114,7 +119,7 @@ def find_grid(location, grid):
 #     tokenize the sentence as required and adding up the sentimental score
 #     of words which are matched by affin dict
 ###################################################################
-def match_sentimental_words(text, afinn, sentiment_sums, grid_code, maxW):
+def match_sentimental_words(text, afinn, sentiment_sums, grid_code):
     words = re.split(r'[\s]+', text) # split sentence into words using re
     special_endings = [',', '.', '!', '?', '\'', '\"'] # special endings ,.!?'"
     i = 0
@@ -137,6 +142,8 @@ def match_sentimental_words(text, afinn, sentiment_sums, grid_code, maxW):
         matched_word = None
         for j in range(len(words), i, -1):  # Moving right pointer from tail to head
             temp = ' '.join(words[i:j])
+            # if len(temp) >= 1 and temp[-1] in special_endings:
+            #     temp = re.match(r'^(.*?)([\,\.\?\!\'\"]+)$', temp).group(1)
             while len(temp) >= 1 and temp[-1] in special_endings:
                 temp = temp[:-1]
             if temp in afinn.keys():    # if matches, it can guarantee that this word is the maximum matching word 
@@ -187,9 +194,8 @@ def mapping_id_to_gc(gc_id):
 #     assign data to each active thread and collect the computed results      
 ################################################################### 
 
-def split_data_and_process(path, size, comm, rank, afinn, grid, maxW):
-    data_to_share = [] # list for storing the shared tweet data
-    tweet = {} # empty tweet 
+def split_data_and_process(path, size, comm, rank, afinn, grid):
+    # data_to_share = [] # list for storing the shared tweet data
     senti_sums_splits = [] # the splitted scores
     m = 100
     with open(path, 'r', encoding='utf-8') as f:
@@ -205,29 +211,40 @@ def split_data_and_process(path, size, comm, rank, afinn, grid, maxW):
         #         # apend the tweet into share list only if it is valid
         #         data_to_share.append(tweet) 
         #         tweet = {}
+        i = 0
         for tweet in ijson.items(f, 'rows.item'):
-            data_to_share.append(tweet) 
-            if len(data_to_share) == size * m:
-                datas = [data_to_share[i * m : (i + 1) * m] for i in range(size)] # create the iterable data list for sharing
-                data_to_process = comm.scatter(datas, root=0) # scatter data from rank 0 task to all active tasks
-                senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid, maxW) # paraller commputing sentimental scores
-                senti_sums_split = comm.reduce(senti_sum, op=gather_result, root=0) # collected the reduced computation results
-                if rank == 0:
-                    senti_sums_splits.append(senti_sums_split) # append the the compuation result of this batch
-                data_to_share = [] # clear the share list and restart
-    if len(data_to_share) > 0: # Do the last parallel computing if data is left 
-        chunk_size = int(math.ceil(float(len(data_to_share)) / size))
-        datas = [data_to_share[i * chunk_size : (i + 1) * chunk_size] for i in range(size)]
-        data_to_process = comm.scatter(datas, root=0)
-        senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid, maxW)
-        senti_sums_split = comm.reduce(senti_sum, op=gather_result, root=0)
-        if rank == 0:
-            senti_sums_splits.append(senti_sums_split) 
+            if i % size == rank:
+                senti_sum = calculate_senti_sum_in_parallel(tweet, afinn, grid)
+                senti_sums_splits.append(senti_sum)
+            i += 1
+    sneti_sums_chunk = reduce(gather_result, senti_sums_splits)
+    senti_sums_total = comm.reduce(sneti_sums_chunk, op=gather_result, root=0)
     if rank == 0:
-        senti_sums_total = reduce(gather_result, senti_sums_splits) # reduce adding up the splitted tweet counts and tweet scores
         senti_sums_total['#Overall Sentiment Score'] = senti_sums_total['#Overall Sentiment Score'].apply(intToPositiveStr) # change int to string with signs
         print('The sentimental sum of twitter dataset is:')
         print(senti_sums_total)
+    #         data_to_share.append(tweet) 
+    #         if len(data_to_share) == size * m:
+    #             datas = [data_to_share[i * m : (i + 1) * m] for i in range(size)] # create the iterable data list for sharing
+    #             data_to_process = comm.scatter(datas, root=0) # scatter data from rank 0 task to all active tasks
+    #             senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid, maxW) # paraller commputing sentimental scores
+    #             senti_sums_split = comm.reduce(senti_sum, op=gather_result, root=0) # collected the reduced computation results
+    #             if rank == 0:
+    #                 senti_sums_splits.append(senti_sums_split) # append the the compuation result of this batch
+    #             data_to_share = [] # clear the share list and restart
+    # if len(data_to_share) > 0: # Do the last parallel computing if data is left 
+    #     chunk_size = int(math.ceil(float(len(data_to_share)) / size))
+    #     datas = [data_to_share[i * chunk_size : (i + 1) * chunk_size] for i in range(size)]
+    #     data_to_process = comm.scatter(datas, root=0)
+    #     senti_sum = calculate_senti_sum_in_parallel(data_to_process, afinn, grid, maxW)
+    #     senti_sums_split = comm.reduce(senti_sum, op=gather_result, root=0)
+    #     if rank == 0:
+    #         senti_sums_splits.append(senti_sums_split) 
+    # if rank == 0:
+    #     senti_sums_total = reduce(gather_result, senti_sums_splits) # reduce adding up the splitted tweet counts and tweet scores
+    #     senti_sums_total['#Overall Sentiment Score'] = senti_sums_total['#Overall Sentiment Score'].apply(intToPositiveStr) # change int to string with signs
+    #     print('The sentimental sum of twitter dataset is:')
+    #     print(senti_sums_total)
 
 
 
@@ -243,6 +260,9 @@ def gather_result(x,y):
     x['#Total Tweets'] = x['#Total Tweets'] + y['#Total Tweets']
     x['#Overall Sentiment Score'] = x['#Overall Sentiment Score'] + y['#Overall Sentiment Score']
     return x
+
+def gather_dict(x,y):
+    return {**x, **y}
 
 ###################################################
 # param:
@@ -266,20 +286,20 @@ def main():
     comm = MPI.COMM_WORLD  # the global communicator
     rank = comm.Get_rank() # the index of member
     size = comm.Get_size() # the total number of members
-
-    afinn, grid, data_to_share = None, None, None
-    maxW = None
     
-    if rank == 0 :
-        afinn, maxW = generate_Affin_Dict(args.afinn)
-        grid = generate_grid_dict(args.grid)
-        # start_t = datetime.now().timestamp()
+    afinn = generate_Affin_Dict(args.afinn, comm, size, rank)
+    grid = generate_grid_dict(args.grid, comm, size, rank)
 
-    afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
-    grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
-    maxW = comm.bcast(maxW, root=0) # broadcast maxW to the other members of the group
+    # if rank == 0 :
+    #     afinn = generate_Affin_Dict(args.afinn)
+    #     grid = generate_grid_dict(args.grid)
+    #     # start_t = datetime.now().timestamp()
+
+    # afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
+    # grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
+    # maxW = comm.bcast(maxW, root=0) # broadcast maxW to the other members of the group
         
-    split_data_and_process(args.tweet, size, comm, rank, afinn, grid, maxW)
+    split_data_and_process(args.tweet, size, comm, rank, afinn, grid)
     # if rank == 0:
     #     print('Time elapsed: %s' % (datetime.now().timestamp() - start_t))
 
