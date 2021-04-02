@@ -22,6 +22,11 @@ def generate_Affin_Dict(address, comm, size, rank):
     with open(address, 'r') as f:
         with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
             offset = mm.size() / size
+            end_line = None
+            if rank < size - 1:
+                mm.seek(int((rank + 1) * offset))
+                mm.readline()
+                end_line = str(mm.readline(), encoding='utf-8')
             mm.seek(int(rank * offset))
             i = 0
             start_lines = None
@@ -30,11 +35,8 @@ def generate_Affin_Dict(address, comm, size, rank):
                 if rank != 0 and i == 0:
                     i += 1
                     continue
-                if not start_lines:
-                    start_lines = {rank : line}
-                    start_lines = comm.allreduce(start_lines, op=gather_dict)
-                if rank < size - 1 and line == start_lines[rank + 1]:
-                    break
+                if rank < size - 1 and line == end_line:
+                    break 
                 kv = re.split(r'[\s"]+', line.strip())
                 # for the splitted words, except for the last word as score, the rest words make up the token to be matched
                 token = ' '.join(kv[0:len(kv) - 1]) 
@@ -55,6 +57,11 @@ def generate_grid_dict(address, comm, size, rank):
     with open(address, 'r') as f:
         with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
             offset = mm.size() / size
+            end_line = None
+            if rank < size - 1:
+                mm.seek(int((rank + 1) * offset))
+                mm.readline()
+                end_line = str(mm.readline(), encoding='utf-8')
             mm.seek(int(rank * offset))
             i = 0
             start_lines = None
@@ -63,11 +70,8 @@ def generate_grid_dict(address, comm, size, rank):
                 if rank != 0 and i == 0:
                     i += 1
                     continue
-                if not start_lines:
-                    start_lines = {rank : line}
-                    start_lines = comm.allreduce(start_lines, op=gather_dict)
-                if rank < size - 1 and line == start_lines[rank + 1]:
-                    break 
+                if rank < size - 1 and line == end_line:
+                    break  
                 if line.endswith('] ] ] } },\n'):
                     line = json.loads(line[:-2])
                 elif line.endswith('] ] ] } }\n'):
@@ -150,37 +154,43 @@ def match_sentimental_words(text, afinn, sentiment_sums, grid_code):
     words = re.split(r'[\s]+', text) # split sentence into words using re
     special_endings = [',', '.', '!', '?', '\'', '\"'] # special endings ,.!?'"
     i = 0
-    # while i < len(words):  # MaxMatch algorithm
-    #     selected_words = words[i:]
-    #     temp = selected_words[0]
-    #     matched_word = '' if not temp in afinn.keys() else temp
-    #     j = 1
-    #     while j < len(selected_words) and j + 1 <= maxW:
-    #         temp = ' '.join([temp, selected_words[j]])
-    #         j += 1
-    #         if temp in afinn.keys():
-    #             matched_word = temp
-    #     if matched_word == '':
-    #         i += 1
-    #     else:
-    #         sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
-    #         i += len(matched_word.split())
-    while i < len(words):
+    while i < len(words):  # MaxMatch algorithm
+        selected_words = words[i:]
         matched_word = None
-        for j in range(len(words), i, -1):  # Moving right pointer from tail to head
-            temp = ' '.join(words[i:j])
-            # if len(temp) >= 1 and temp[-1] in special_endings:
-            #     temp = re.match(r'^(.*?)([\,\.\?\!\'\"]+)$', temp).group(1)
-            while len(temp) >= 1 and temp[-1] in special_endings:
-                temp = temp[:-1]
-            if temp in afinn.keys():    # if matches, it can guarantee that this word is the maximum matching word 
+        j = 1
+        wl = 1
+        maxW = 2
+        while j <= len(selected_words) and j <= maxW:
+            temp = ' '.join(selected_words[:j])
+            if len(temp) >= 1 and temp[-1] in special_endings:
+                temp = re.match(r'^(.*?)([\,\.\?\!\'\"]+)$', temp).group(1)
+            # while len(temp) >= 1 and temp[-1] in special_endings:
+            #     temp = temp[:-1]
+            if temp in afinn.keys():
                 matched_word = temp
-                break
-        if matched_word is None:
+                wl = j
+            j += 1
+        if not matched_word:
             i += 1
         else:
             sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
-            i = j   # derived from i += j - i
+            i += wl
+    # while i < len(words):
+    #     matched_word = None
+    #     for j in range(len(words), i, -1):  # Moving right pointer from tail to head
+    #         temp = ' '.join(words[i:j])
+    #         if len(temp) >= 1 and temp[-1] in special_endings:
+    #             temp = re.match(r'^(.*?)([\,\.\?\!\'\"]+)$', temp).group(1)
+    #         # while len(temp) >= 1 and temp[-1] in special_endings:
+    #         #     temp = temp[:-1]
+    #         if temp in afinn.keys():    # if matches, it can guarantee that this word is the maximum matching word 
+    #             matched_word = temp
+    #             break
+    #     if matched_word is None:
+    #         i += 1
+    #     else:
+    #         sentiment_sums[mapping_gc_to_id(grid_code)][2] += afinn[matched_word]
+    #         i = j   # derived from i += j - i
 
 
 #########################################
@@ -222,8 +232,8 @@ def mapping_id_to_gc(gc_id):
 ################################################################### 
 
 def split_data_and_process(path, size, comm, rank, afinn, grid):
-    data_to_process = [] # list for storing the shared tweet data
-    senti_sums_splits = [] # the splitted scores
+    # data_to_process = [] # list for storing the shared tweet data
+    # senti_sums_splits = [] # the splitted scores
     # m = 1000
     senti_sums_chunk = []
     for i in range(len(grid.keys())):
@@ -231,19 +241,20 @@ def split_data_and_process(path, size, comm, rank, afinn, grid):
     with open(path, 'r', encoding='utf-8') as f:
         with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
             offset = mm.size() / size
+            end_line = None
+            if rank < size - 1:
+                mm.seek(int((rank + 1) * offset))
+                mm.readline()
+                end_line = str(mm.readline(), encoding='utf-8')
             mm.seek(int(rank * offset))
             i = 0
-            start_lines = None
             for line in iter(mm.readline, b''):
                 line = str(line, encoding='utf-8')
                 if rank != 0 and i == 0:
                     i += 1
                     continue
-                if not start_lines:
-                    start_lines = {rank : line}
-                    start_lines = comm.allreduce(start_lines, op=gather_dict)
-                if rank < size - 1 and line == start_lines[rank + 1]:
-                    break                  
+                if rank < size - 1 and line == end_line:
+                    break                 
                 if line.endswith('}},\r\n'):
                     line = json.loads(line[:-3])
                 elif line.endswith('}}]}\r\n'):
@@ -359,7 +370,7 @@ def main():
     rank = comm.Get_rank() # the index of member
     size = comm.Get_size() # the total number of members
     
-    # start_t = datetime.now().timestamp()
+    start_t = datetime.now().timestamp()
     afinn = generate_Affin_Dict(args.afinn, comm, size, rank)
     grid = generate_grid_dict(args.grid, comm, size, rank)
 
@@ -373,8 +384,8 @@ def main():
     # maxW = comm.bcast(maxW, root=0) # broadcast maxW to the other members of the group
 
     split_data_and_process(args.tweet, size, comm, rank, afinn, grid)
-    # if rank == 0:
-    #     print('Time elapsed: %s' % (datetime.now().timestamp() - start_t))
+    if rank == 0:
+        print('Time elapsed: %s' % (datetime.now().timestamp() - start_t))
 
 if __name__ == "__main__":
     main()
