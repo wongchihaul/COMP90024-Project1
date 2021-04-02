@@ -21,29 +21,37 @@ def generate_Affin_Dict(address, comm, size, rank):
     afinn = {}
     with open(address, 'r') as f:
         with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
-            offset = mm.size() / size
-            end_line = None
-            if rank < size - 1:
-                mm.seek(int((rank + 1) * offset))
-                mm.readline()
-                end_line = str(mm.readline(), encoding='utf-8')
-            mm.seek(int(rank * offset))
-            i = 0
-            start_lines = None
             for line in iter(mm.readline, b''): # Read by lines
                 line = str(line, encoding='utf-8')
-                if rank != 0 and i == 0:
-                    i += 1
-                    continue
-                if rank < size - 1 and line == end_line:
-                    break 
                 kv = re.split(r'[\s"]+', line.strip())
                 # for the splitted words, except for the last word as score, the rest words make up the token to be matched
                 token = ' '.join(kv[0:len(kv) - 1]) 
                 num = int(kv[-1])
                 afinn[token] = num # append into the dict
-    afinn_total = comm.allreduce(afinn, op=gather_dict)
-    return afinn_total
+    return afinn
+
+    #         offset = mm.size() / size
+    #         end_line = None
+    #         if rank < size - 1:
+    #             mm.seek(int((rank + 1) * offset))
+    #             mm.readline()
+    #             end_line = str(mm.readline(), encoding='utf-8')
+    #         mm.seek(int(rank * offset))
+    #         i = 0
+    #         for line in iter(mm.readline, b''): # Read by lines
+    #             line = str(line, encoding='utf-8')
+    #             if rank != 0 and i == 0:
+    #                 i += 1
+    #                 continue
+    #             if rank < size - 1 and line == end_line:
+    #                 break 
+    #             kv = re.split(r'[\s"]+', line.strip())
+    #             # for the splitted words, except for the last word as score, the rest words make up the token to be matched
+    #             token = ' '.join(kv[0:len(kv) - 1]) 
+    #             num = int(kv[-1])
+    #             afinn[token] = num # append into the dict
+    # afinn_total = comm.allreduce(afinn, op=gather_dict)
+    # return afinn_total
 
 ##########################################################
 # param:
@@ -56,22 +64,8 @@ def generate_grid_dict(address, comm, size, rank):
     grid = {}
     with open(address, 'r') as f:
         with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as mm:
-            offset = mm.size() / size
-            end_line = None
-            if rank < size - 1:
-                mm.seek(int((rank + 1) * offset))
-                mm.readline()
-                end_line = str(mm.readline(), encoding='utf-8')
-            mm.seek(int(rank * offset))
-            i = 0
-            start_lines = None
             for line in iter(mm.readline, b''):
-                line = str(line, encoding='utf-8')
-                if rank != 0 and i == 0:
-                    i += 1
-                    continue
-                if rank < size - 1 and line == end_line:
-                    break  
+                line = str(line, encoding='utf-8') 
                 if line.endswith('] ] ] } },\n'):
                     line = json.loads(line[:-2])
                 elif line.endswith('] ] ] } }\n'):
@@ -86,7 +80,37 @@ def generate_grid_dict(address, comm, size, rank):
                     if key != 'id':
                         coords[key] = value
                 grid[ID] = coords
-    grid_total = comm.allreduce(grid, op=gather_dict)
+    return grid
+    #         offset = mm.size() / size
+    #         end_line = None
+    #         if rank < size - 1:
+    #             mm.seek(int((rank + 1) * offset))
+    #             mm.readline()
+    #             end_line = str(mm.readline(), encoding='utf-8')
+    #         mm.seek(int(rank * offset))
+    #         i = 0
+    #         for line in iter(mm.readline, b''):
+    #             line = str(line, encoding='utf-8')
+    #             if rank != 0 and i == 0:
+    #                 i += 1
+    #                 continue
+    #             if rank < size - 1 and line == end_line:
+    #                 break  
+    #             if line.endswith('] ] ] } },\n'):
+    #                 line = json.loads(line[:-2])
+    #             elif line.endswith('] ] ] } }\n'):
+    #                 line = json.loads(line[:-1]) 
+    #             else:
+    #                 continue    
+    #             feature = line 
+    #             # properties = [id, xmin, xmax, ymin, ymax]
+    #             ID = feature['properties']['id']
+    #             coords = {}
+    #             for key, value in feature['properties'].items():
+    #                 if key != 'id':
+    #                     coords[key] = value
+    #             grid[ID] = coords
+    # grid_total = comm.allreduce(grid, op=gather_dict)
     return grid_total
 
 
@@ -247,6 +271,7 @@ def split_data_and_process(path, size, comm, rank, afinn, grid):
                 mm.readline()
                 end_line = str(mm.readline(), encoding='utf-8')
             mm.seek(int(rank * offset))
+            #print('Rank %s start at %s of %s' % (rank, mm.tell(), mm.size()))
             i = 0
             for line in iter(mm.readline, b''):
                 line = str(line, encoding='utf-8')
@@ -370,22 +395,21 @@ def main():
     rank = comm.Get_rank() # the index of member
     size = comm.Get_size() # the total number of members
     
-    start_t = datetime.now().timestamp()
+    # start_t = datetime.now().timestamp()
+    # print('I am rank %s, starting at %s' % (rank, datetime.now()))
+    # start_t = datetime.now().timestamp()
+    # afinn, grid = None, None
     afinn = generate_Affin_Dict(args.afinn, comm, size, rank)
     grid = generate_grid_dict(args.grid, comm, size, rank)
 
-    # afinn, grid = None, None
-    # if rank == 0 :
-    #     afinn = generate_Affin_Dict(args.afinn)
-    #     grid = generate_grid_dict(args.grid)
-
     # afinn = comm.bcast(afinn, root=0) # broadcast afinn dict to the other members of the group
     # grid = comm.bcast(grid, root=0) # broadcast grid dict to the other members of the group
+    # afinn = generate_Affin_Dict(args.afinn, comm, size, rank)
+    # grid = generate_grid_dict(args.grid, comm, size, rank)
     # maxW = comm.bcast(maxW, root=0) # broadcast maxW to the other members of the group
 
     split_data_and_process(args.tweet, size, comm, rank, afinn, grid)
-    if rank == 0:
-        print('Time elapsed: %s' % (datetime.now().timestamp() - start_t))
+    # print('Rank %s Time elapsed: %s' % (rank, datetime.now().timestamp() - start_t))
 
 if __name__ == "__main__":
     main()
