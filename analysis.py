@@ -1,4 +1,5 @@
 import json
+import ijson
 
 #########################################
 # param:
@@ -96,16 +97,20 @@ if __name__ == "__main__":
     address_3 = 'tinyTwitter.json'
     address_4 = 'smallTwitter.json'
 
-    afinn = generate_Affin_Dict(address_1)
-    grid = generate_grid_dict(address_2)
-    tiny_sum = calculate_senti_sum(address_3, afinn, grid)
-    small_sum = calculate_senti_sum(address_4, afinn, grid)
+    with open(address_3, 'r', encoding='utf-8') as f:
+        for row in ijson.items(f, 'rows.item'):
+            print(row)
 
-    print('The sentimental sum of tiny twitter dataset is: %s' % tiny_sum)
-    print('The sentimental sum of small twitter dataset is: %s' % small_sum)
+    # afinn = generate_Affin_Dict(address_1)
+    # grid = generate_grid_dict(address_2)
+    # tiny_sum = calculate_senti_sum(address_3, afinn, grid)
+    # small_sum = calculate_senti_sum(address_4, afinn, grid)
 
-    with open('tiny.json', 'w') as t :
-        json.dump(tiny_sum, t)
-    with open('small.json', 'w') as s:
-        json.dump(small_sum, s)
+    # print('The sentimental sum of tiny twitter dataset is: %s' % tiny_sum)
+    # print('The sentimental sum of small twitter dataset is: %s' % small_sum)
+
+    # with open('tiny.json', 'w') as t :
+    #     json.dump(tiny_sum, t)
+    # with open('small.json', 'w') as s:
+    #     json.dump(small_sum, s)
     
